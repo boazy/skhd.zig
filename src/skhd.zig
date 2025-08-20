@@ -126,6 +126,14 @@ pub fn run(self: *Skhd, enable_hotload: bool) !void {
     };
     std.posix.sigaction(std.posix.SIG.USR1, &usr1_act, null);
 
+    // Set up signal handler for mode change
+    const usr2_act = std.posix.Sigaction{
+        .handler = .{ .handler = handleSigusr2 },
+        .mask = std.posix.empty_sigset,
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.USR2, &usr2_act, null);
+
     // Set up signal handler for SIGINT (Ctrl+C) to print trace summary
     const int_act = std.posix.Sigaction{
         .handler = .{ .handler = handleSigint },
@@ -595,6 +603,16 @@ fn handleSigusr1(_: c_int) callconv(.C) void {
     }
 }
 
+/// Signal handler for SIGUSR2 - change mode
+fn handleSigusr2(_: c_int) callconv(.C) void {
+    if (global_skhd) |skhd| {
+        log.info("Received SIGUSR2, changing mode", .{});
+        skhd.changeModeFromFile() catch |err| {
+            log.err("Failed to change mode: {}", .{err});
+        };
+    }
+}
+
 /// Signal handler for SIGINT - stop the run loop to allow graceful shutdown
 fn handleSigint(_: c_int) callconv(.C) void {
     // Stop the run loop to allow graceful shutdown with defer statements
@@ -640,6 +658,52 @@ pub fn reloadConfig(self: *Skhd) !void {
     // update the watched files list when hot reload is already enabled.
 
     log.info("Configuration reloaded successfully", .{});
+}
+
+/// Change mode by reading mode name from temporary file
+pub fn changeModeFromFile(self: *Skhd) !void {
+    // Read mode name from temporary file
+    const username = std.posix.getenv("USER") orelse "unknown";
+    const mode_file_path = try std.fmt.allocPrint(self.allocator, "/tmp/skhd_{s}.mode", .{username});
+    defer self.allocator.free(mode_file_path);
+
+    const file = std.fs.openFileAbsolute(mode_file_path, .{}) catch |err| {
+        log.err("Failed to open mode file {s}: {}", .{ mode_file_path, err });
+        return err;
+    };
+    defer file.close();
+
+    const content = try file.readToEndAlloc(self.allocator, 256);
+    defer self.allocator.free(content);
+
+    const mode_name = std.mem.trim(u8, content, " \n\r\t");
+    
+    // Clean up the temporary file
+    std.fs.deleteFileAbsolute(mode_file_path) catch {};
+
+    try self.changeMode(mode_name);
+}
+
+/// Change to specified mode and execute its on_enter command
+pub fn changeMode(self: *Skhd, mode_name: []const u8) !void {
+    log.info("Changing to mode: {s}", .{mode_name});
+
+    // Find the requested mode
+    const new_mode = self.mappings.mode_map.getPtr(mode_name) orelse {
+        log.err("Mode '{s}' not found", .{mode_name});
+        return error.ModeNotFound;
+    };
+
+    // Change to the new mode
+    self.current_mode = new_mode;
+
+    // Execute the mode's on_enter command if it exists
+    if (new_mode.command) |mode_cmd| {
+        log.info("Executing mode command: {s}", .{mode_cmd});
+        try forkAndExec(self.mappings.shell, mode_cmd, self.verbose);
+    }
+
+    log.info("Successfully changed to mode: {s}", .{mode_name});
 }
 
 pub fn enableHotReload(self: *Skhd) !void {

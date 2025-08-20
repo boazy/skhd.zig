@@ -111,6 +111,15 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, args[i], "-r") or std.mem.eql(u8, args[i], "--reload")) {
             try service.reloadConfig(gpa);
             return;
+        } else if (std.mem.eql(u8, args[i], "-m") or std.mem.eql(u8, args[i], "--mode")) {
+            if (i + 1 < args.len) {
+                i += 1;
+                try service.changeMode(gpa, args[i]);
+                return;
+            } else {
+                std.debug.print("Error: --mode requires a mode name\n", .{});
+                return;
+            }
         } else if (std.mem.eql(u8, args[i], "-h") or std.mem.eql(u8, args[i], "--no-hotload")) {
             no_hotload = true;
         } else if (std.mem.eql(u8, args[i], "-P") or std.mem.eql(u8, args[i], "--profile")) {
@@ -226,6 +235,7 @@ fn printHelp() void {
         \\  -k, --key <keyspec>    Synthesize a keypress
         \\  -t, --text <text>      Synthesize text input
         \\  -r, --reload           Reload config on running instance
+        \\  -m, --mode <mode>      Change mode on running instance
         \\  -v, --version          Print version
         \\      --help             Show this help message
         \\

@@ -260,6 +260,38 @@ pub fn reloadConfig(allocator: std.mem.Allocator) !void {
     std.debug.print("Sent reload signal to skhd (PID {d})\n", .{pid});
 }
 
+pub fn changeMode(allocator: std.mem.Allocator, mode_name: []const u8) !void {
+    // Read PID file to find running instance
+    const pid = try readPidFile(allocator) orelse {
+        std.debug.print("skhd is not running (no PID file found)\n", .{});
+        return error.NotRunning;
+    };
+
+    // Check if process is actually running
+    if (!isProcessRunning(pid)) {
+        std.debug.print("skhd is not running (PID {d} not found)\n", .{pid});
+        removePidFile(allocator);
+        return error.NotRunning;
+    }
+
+    // Write mode name to temporary file
+    const username = std.posix.getenv("USER") orelse "unknown";
+    const mode_file_path = try std.fmt.allocPrint(allocator, "/tmp/skhd_{s}.mode", .{username});
+    defer allocator.free(mode_file_path);
+
+    const file = try std.fs.createFileAbsolute(mode_file_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(mode_name);
+
+    // Send SIGUSR2 to change mode
+    std.posix.kill(pid, std.posix.SIG.USR2) catch |err| {
+        std.debug.print("Failed to send mode change signal to PID {d}: {}\n", .{ pid, err });
+        return error.SignalFailed;
+    };
+
+    std.debug.print("Sent mode change signal to skhd (PID {d}) for mode '{s}'\n", .{ pid, mode_name });
+}
+
 pub fn checkServiceStatus(allocator: std.mem.Allocator) !void {
     // Check if service is installed
     const service_path = try getServicePath(allocator);
